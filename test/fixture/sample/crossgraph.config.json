@@ -1,0 +1,11 @@
+{
+  "ts": {
+    "projects": ["tsconfig.json"],
+    "extraProjects": [{ "name": "tests", "extends": "tsconfig.json", "include": ["web/**/*.test.ts"] }]
+  },
+  "rust": { "root": "rust" },
+  "tests": ["**/*.test.ts"],
+  "entries": ["web/main.ts"],
+  "wasm": [{ "crate": "rust/src", "package": "@sample/wasm" }],
+  "tauri": { "commands": "rust/src", "callers": ["web"], "invoke": ["invoke"] }
+}

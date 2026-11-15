@@ -1,0 +1,10 @@
+{
+  "name": "crossgraph",
+  "version": "0.1.0",
+  "description": "One code graph across TypeScript and Rust: callers, dead code and paths through wasm-bindgen and Tauri.",
+  "type": "module",
+  "bin": { "crossgraph": "bin/crossgraph.mjs" },
+  "files": ["bin", "src"],
+  "engines": { "node": ">=22.13" },
+  "scripts": { "test": "node --test \"test/*.test.mjs\"" }
+}

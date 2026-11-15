@@ -66,7 +66,9 @@ Node's `path.matchesGlob`; a `**/x` glob also matches `x` at the root.
 - `ts.projects`: tsconfigs to index.
 - `ts.extraProjects`: files no tsconfig covers, such as tests or scripts.
   crossgraph writes a tsconfig for each into `.crossgraph/`. Takes `name`,
-  `include`, and optionally `extends` and `compilerOptions`.
+  `include`, and optionally `extends` and `compilerOptions`. As in any
+  tsconfig, path options in `compilerOptions` (such as `rootDir`) resolve
+  from the written file, so `"../src"` means `src` at the root.
 - `ts.indexer`: the npx package to index with; defaults to a pinned
   `@sourcegraph/scip-typescript`.
 - `rust.root`: the Cargo workspace root. Leave `rust` out for a TS-only repo.

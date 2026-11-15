@@ -17,7 +17,9 @@ plain SQL.
 - Generated code in place, such as wasm-bindgen output. An import
   that does not resolve leaves its uses out of the graph, so whatever they
   reach looks dead. List such files under `requires` and `build` refuses
-  to run without them.
+  to run without them. `build` also refuses when a file imports a `wasm`
+  package the TS indexer could not resolve, such as an unlinked workspace
+  package.
 
 ## Use
 
@@ -69,7 +71,9 @@ All paths are relative to the root and use forward slashes. Globs follow
 Node's `path.matchesGlob`; a `**/x` glob also matches `x` at the root.
 
 - `ts.projects`: tsconfigs to index.
-- `ts.extraProjects`: files no tsconfig covers, such as tests or scripts.
+- `ts.extraProjects`: files no tsconfig covers, such as tests, scripts or
+  generated declarations. The TS indexer reads only the files a tsconfig
+  includes, so uses inside a file that is merely imported are lost.
   crossgraph writes a tsconfig for each into `.crossgraph/`. Takes `name`,
   `include`, and optionally `extends` and `compilerOptions`. As in any
   tsconfig, path options in `compilerOptions` (such as `rootDir`) resolve
@@ -82,21 +86,27 @@ Node's `path.matchesGlob`; a `**/x` glob also matches `x` at the root.
 - `exclude`: files left out of the graph, such as vendored code. Uses of their
   symbols still show, as external nodes.
 - `tests`: test files. Code only they use is reported by `test-only`, not
-  `dead`. Rust items in a `tests` module count as tests too.
+  `dead`. Rust `#[test]` functions, `#[cfg(test)]` modules and items in a
+  `tests` module count as tests too.
 - `entries`: files whose definitions are used from outside the code, such as
   framework routes. They are never reported dead.
 - `wasm`: crates exported with `#[wasm_bindgen]`, and the npm package name
-  their bindings are published under. A `js_name` sets the TS name.
+  their bindings are published under. A `js_name` sets the TS name. Methods
+  in a `#[wasm_bindgen] impl` link through their JS class (`js_class`, else
+  the type name), constructors to the class itself, and `getter`/`setter`
+  names are followed. Functions in an `extern` block are imports, not
+  exports, and are not linked.
 - `tauri`: where `#[tauri::command]` functions live, which dirs call them, and
   the names of the functions that invoke a command by its string name.
 
 ## What it cannot see
 
-- Methods inside a `#[wasm_bindgen] impl` block are not linked yet.
 - A Tauri command named by a variable rather than a string literal is not
   linked.
 - Code reached only by reflection, dynamic import with a computed path, or
   framework conventions not listed in `entries` looks dead.
+- Rust enum variants count as members of their enum, like fields, and are
+  not reported on their own.
 - Trait implementations, `main`, `.d.ts` declarations and tests are never
   reported dead, since their callers are outside the index.
 
@@ -104,10 +114,22 @@ Node's `path.matchesGlob`; a `**/x` glob also matches `x` at the root.
 
 1. `scip-typescript` and `rust-analyzer scip` index each language.
 2. Each use becomes an edge from the innermost definition around it to the
-   definition it names. Implementations link to the interface they implement.
+   definition it names. Implementations and the interface or trait member
+   they implement link both ways, so a declaration that only dispatches is
+   not dead.
 3. A source scan finds `#[wasm_bindgen]` and `#[tauri::command]` functions and
-   the TS calls that reach them, and adds those edges.
-4. Nodes and edges go into SQLite (`nodes`, `edges`, `missing`, `unlinked`).
+   the TS calls that reach them, and adds those edges. It also links serde
+   attributes that name a function by string (`default = "yes"`) and
+   `macro_rules!` bodies to the functions they call, since rust-analyzer
+   records neither. A statement under `#[cfg(...)]` links its
+   `some_crate::f()` calls into workspace crates, as rust-analyzer skips
+   code whose cfg is off on the indexing machine.
+4. TS types match by shape, so a call through an interface names the
+   interface's member, never the class behind it. A used member of a type
+   links to the same member of every used class that has all the type's
+   members. Such an edge, and a wasm export's `.d.ts` declaration, only pass
+   a use along: they count while their own source is used.
+5. Nodes and edges go into SQLite (`nodes`, `edges`, `missing`, `unlinked`).
 
 ## Develop
 

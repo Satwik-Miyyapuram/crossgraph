@@ -8,11 +8,12 @@ import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { extname, join, relative } from "node:path";
 import { generatedProjects, loadConfig } from "./config.mjs";
 import { buildGraph } from "./graph.mjs";
-import { tauriLinks, wasmLinks } from "./linkers.mjs";
+import { crateDirs, rustLinks, tauriLinks, unresolvedImports, wasmLinks } from "./linkers.mjs";
 import { readScip } from "./scip.mjs";
 import { writeDb } from "./store.mjs";
 
 const TS_INDEXER = "@sourcegraph/scip-typescript@0.6.2";
+const TS_EXTS = [".ts", ".tsx", ".js", ".mjs"];
 const SKIP_DIRS = new Set(["node_modules", "target", ".git"]);
 
 /**
@@ -54,15 +55,31 @@ export function build(root, { index = true, log = () => {} } = {}) {
 
   const sources = (dirs, exts) => dirs.flatMap((dir) => readSources(root, dir, exts, config.isExcluded));
   const links = config.wasm.flatMap((w) => wasmLinks(sources([w.crate], [".rs"]), w.package));
+  if (config.wasm.length) {
+    const tsFiles = sources(["."], TS_EXTS);
+    for (const w of config.wasm) {
+      const lost = unresolvedImports(documents, tsFiles, w.package);
+      if (lost.length) {
+        throw new Error(`crossgraph: ${w.package} does not resolve in these files, so the Rust they reach looks dead:\n${lost.map((p) => `  ${p}`).join("\n")}`);
+      }
+    }
+  }
+  let testLines = [];
+  if (config.rust) {
+    const rustRoot = config.rust.root ?? ".";
+    const rust = rustLinks(sources([rustRoot], [".rs"]), crateDirs(sources([rustRoot], [".toml"])));
+    links.push(...rust.links);
+    testLines = rust.tests;
+  }
   let unlinked = [];
   if (config.tauri) {
-    const tauri = tauriLinks(sources([config.tauri.commands], [".rs"]), sources(config.tauri.callers ?? ["."], [".ts", ".tsx", ".js", ".mjs"]), config.tauri.invoke ?? ["invoke"]);
+    const tauri = tauriLinks(sources([config.tauri.commands], [".rs"]), sources(config.tauri.callers ?? ["."], TS_EXTS), config.tauri.invoke ?? ["invoke"]);
     links.push(...tauri.links);
     unlinked = tauri.unlinked;
   }
 
   log("building graph");
-  const graph = buildGraph({ documents, links, isTest: config.isTest, exclude: config.isExcluded });
+  const graph = buildGraph({ documents, links, isTest: config.isTest, testLines, exclude: config.isExcluded });
   const db = join(out, "graph.db");
   writeDb(db, { ...graph, unlinked }, { isEntry: config.isEntry });
   return { db, nodes: graph.nodes.length, edges: graph.edges.length, links: links.length, missing: graph.missing.length, unlinked: unlinked.length };

@@ -65,8 +65,18 @@ const CANDIDATE = `
   AND n.file NOT LIKE '%.d.ts' AND n.name NOT IN ('main', '<constructor>')
   AND n.symbol NOT LIKE '%impl#[%][%]%'
 `;
-const USED_OUTSIDE_TESTS = "EXISTS (SELECT 1 FROM edges e JOIN nodes s ON s.id = e.src WHERE e.dst = n.id AND s.test = 0)";
-const USED = "EXISTS (SELECT 1 FROM edges e WHERE e.dst = n.id)";
+// Some edges only pass a use along, so they count only while their source is
+// used: a wasm export's .d.ts declaration, and an interface member linked by
+// shape to a class member. Chains of them are followed a few hops.
+const PASSES = (e, s) => `(${e}.via = 'structural' OR (${e}.via = 'wasm' AND COALESCE(${s}.file, '') LIKE '%.d.ts'))`;
+function used(src, target = "n", hops = 3) {
+  const [e, s] = [`e${hops}`, `s${hops}`];
+  const passed = hops ? used(src, s, hops - 1) : "0";
+  return `EXISTS (SELECT 1 FROM edges ${e} JOIN nodes ${s} ON ${s}.id = ${e}.src WHERE ${e}.dst = ${target}.id AND ${src(s)}
+    AND (NOT ${PASSES(e, s)} OR ${passed}))`;
+}
+const USED_OUTSIDE_TESTS = used((s) => `${s}.test = 0`);
+const USED = used(() => "1");
 
 /** Definitions nothing outside tests uses. */
 export function dead(db) {

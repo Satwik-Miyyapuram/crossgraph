@@ -16,11 +16,15 @@ const LANG = { "scip-typescript": "ts", "rust-analyzer": "rust" };
  *   documents: { path: string, occurrences: object[], symbols: object[] }[],
  *   links?: object[],
  *   isTest?: (path: string) => boolean,
+ *   testLines?: { file: string, from: number, to: number }[],
  *   exclude?: (path: string) => boolean,
  * }} input
  */
-export function buildGraph({ documents, links = [], isTest = () => false, exclude = () => false }) {
+export function buildGraph({ documents, links = [], isTest = () => false, testLines = [], exclude = () => false }) {
   const docs = uniqueDocuments(documents.filter((d) => !exclude(d.path)));
+  // Test code a path cannot tell apart, such as a Rust `#[cfg(test)]` module.
+  const testsIn = Map.groupBy(testLines, (t) => t.file);
+  const onTestLine = (file, line) => testsIn.get(file)?.some((t) => t.from <= line && line <= t.to) ?? false;
 
   // Where each symbol is defined. A symbol defined in more than one file is
   // ambiguous (rust-analyzer names every test crate root `crate/`), so its
@@ -58,7 +62,7 @@ export function buildGraph({ documents, links = [], isTest = () => false, exclud
         file: d.path,
         line: occ.range[0] + 1,
         kind: kindOf(occ.symbol),
-        test: isTest(d.path) || inTestModule(occ.symbol),
+        test: isTest(d.path) || inTestModule(occ.symbol) || onTestLine(d.path, occ.range[0] + 1),
       });
       if (occ.enclosing) bodies.push({ key, range: occ.enclosing });
     }
@@ -92,7 +96,12 @@ export function buildGraph({ documents, links = [], isTest = () => false, exclud
       for (const rel of sym.relationships ?? []) {
         if (!(rel.implementation || rel.reference) || !isNode(rel.symbol) || !defsOf.has(sym.symbol)) continue;
         for (const dst of targets(sym.symbol, d.path)) {
-          for (const src of targets(rel.symbol, d.path)) edge(src, dst, d.path, nodes.get(dst).line, "impl");
+          // Both ways: a call through the declaration reaches the implementation,
+          // and the implementation needs the declaration to exist.
+          for (const src of targets(rel.symbol, d.path)) {
+            edge(src, dst, d.path, nodes.get(dst).line, "impl");
+            edge(dst, src, d.path, nodes.get(dst).line, "impl");
+          }
         }
       }
     }
@@ -106,17 +115,47 @@ export function buildGraph({ documents, links = [], isTest = () => false, exclud
     return files.has(file) ? [keyOf(symbol, file)] : [...files].map((f) => keyOf(symbol, f));
   }
 
+  // TS types match by shape: a call through an interface names the interface's
+  // member, never the class whose instance it holds. Link each used member of a
+  // type to the same member of every used class that has all the type's members.
+  const used = new Set(edges.map((e) => e.dst));
+  const shapes = new Map();
+  for (const n of nodes.values()) {
+    const owner = n.lang === "ts" && n.symbol && n.file !== null && n.name !== "<constructor>" && ownerOf(n.symbol);
+    if (!owner || !nodes.has(keyOf(owner, n.file))) continue;
+    const members = shapes.get(keyOf(owner, n.file)) ?? new Map();
+    members.set(n.name, n.key);
+    shapes.set(keyOf(owner, n.file), members);
+  }
+  const having = new Map();
+  for (const [type, members] of shapes) {
+    for (const name of members.keys()) having.has(name) ? having.get(name).push(type) : having.set(name, [type]);
+  }
+  for (const [type, members] of shapes) {
+    const calls = [...members].filter(([, key]) => used.has(key));
+    if (!calls.length) continue;
+    const rarest = [...members.keys()].reduce((a, b) => (having.get(a).length <= having.get(b).length ? a : b));
+    for (const other of having.get(rarest)) {
+      const theirs = shapes.get(other);
+      if (other === type || !used.has(other) || [...members.keys()].some((name) => !theirs.has(name))) continue;
+      for (const [name, key] of calls) edge(key, theirs.get(name), nodes.get(theirs.get(name)).file, nodes.get(theirs.get(name)).line, "structural");
+    }
+  }
+
   const missing = [];
   for (const link of links) {
     const dst = link.to && rustDefinitionAt(docs, link.to);
     const target = dst && keyOf(dst, link.to.file);
     if (link.via === "wasm" || link.package) {
-      // Every TS symbol that names this export of the package.
+      // Every TS symbol that names this export of the package: a method of
+      // the link's class, or a free name when the link has no class.
       const prefix = ` ${link.package} `;
       const uses = new Set();
       for (const d of docs) {
         for (const occ of d.occurrences) {
-          if (occ.symbol.includes(prefix) && nameOf(occ.symbol) === link.name) uses.add(occ.symbol);
+          if (!occ.symbol.includes(prefix) || nameOf(occ.symbol) !== link.name) continue;
+          const parent = parentOf(occ.symbol);
+          if (link.owner ? parent.endsWith(`/${link.owner}#`) : !parent.endsWith("#")) uses.add(occ.symbol);
         }
       }
       if (!target) {
@@ -128,7 +167,7 @@ export function buildGraph({ documents, links = [], isTest = () => false, exclud
     } else {
       if (!target || !containers.has(link.from.file)) {
         // Tests invoke commands their fakes answer; only app code can miss one.
-        if (!isTest(link.from.file)) missing.push({ via: link.via, name: link.name, file: link.from.file, line: link.from.line });
+        if (link.via === "tauri" && !isTest(link.from.file)) missing.push({ via: link.via, name: link.name, file: link.from.file, line: link.from.line });
         continue;
       }
       edge(around(link.from.file, link.from.line - 1, Number.MAX_SAFE_INTEGER), target, link.from.file, link.from.line, link.via);
@@ -180,10 +219,24 @@ export function nameOf(symbol) {
   return match ? match[1].replace(/^`|`$/g, "") : symbol;
 }
 
+/** The descriptors before the last one; ends in `#` for a member of a type. */
+function parentOf(symbol) {
+  const match = LAST.exec(descriptors(symbol));
+  return match ? descriptors(symbol).slice(0, match.index) : "";
+}
+
+/** The symbol of the type a member belongs to, or null if it is no member. */
+function ownerOf(symbol) {
+  const parent = parentOf(symbol);
+  return parent.endsWith("#") ? symbol.slice(0, symbol.length - descriptors(symbol).length + parent.length) : null;
+}
+
 function kindOf(symbol) {
   const match = LAST.exec(descriptors(symbol));
   if (!match) return "other";
   if (match[2] !== undefined) return "function";
+  // A type inside a type is a Rust enum variant: a member, like a field.
+  if (match[3] === "#" && descriptors(symbol).slice(0, match.index).endsWith("#")) return "term";
   return { "#": "type", ".": "term", ":": "term", "/": "namespace", "!": "macro" }[match[3]];
 }
 

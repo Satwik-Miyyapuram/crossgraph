@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { build } from "../src/build.mjs";
+import { encodeScip } from "./encode.mjs";
 
 function repo(config) {
   const root = mkdtempSync(join(tmpdir(), "crossgraph-build-"));
@@ -22,5 +23,16 @@ describe("build", () => {
     mkdirSync(join(root, "pkg"));
     writeFileSync(join(root, "pkg", "app.d.ts"), "");
     assert.equal(build(root, { index: false }).nodes, 0);
+  });
+
+  it("refuses to build while a TS import of a wasm package does not resolve", () => {
+    const root = repo({ wasm: [{ crate: "core", package: "@app/wasm" }] });
+    mkdirSync(join(root, "core"));
+    mkdirSync(join(root, "web"));
+    writeFileSync(join(root, "web", "a.ts"), 'import { f } from "@app/wasm";\nf();\n');
+    mkdirSync(join(root, ".crossgraph"));
+    const scip = encodeScip({ documents: [{ path: "web/a.ts", occurrences: [{ range: [1, 0, 1], symbol: "scip-typescript npm web 1.0.0 `a.ts`/f." }] }] });
+    writeFileSync(join(root, ".crossgraph", "ts.scip"), scip);
+    assert.throws(() => build(root, { index: false }), /@app\/wasm.*web\/a\.ts/s);
   });
 });

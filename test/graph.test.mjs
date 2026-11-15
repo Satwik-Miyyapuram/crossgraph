@@ -173,6 +173,20 @@ describe("buildGraph", () => {
     );
   });
 
+  it("links a Rust trait method and its impls by name, as rust-analyzer emits no relationships", () => {
+    const trait = `${RS}menu/Host#is_full().`;
+    const impl = `${RS}menu/impl#[\`Tauri<R>\`][Host]is_full().`;
+    const other = `${RS}menu/impl#[Tauri][Other]is_full().`;
+    const g = buildGraph({
+      documents: [doc("src/menu.rs", [def(0, trait), def(5, impl), def(10, other)]), doc("tests/menu.rs", [def(0, `${RS}menu/impl#[Fake][\`Host\`]is_full().`)])],
+    });
+    const sym = new Map(g.nodes.map((n) => [n.key, n.symbol]));
+    const pairs = g.edges.filter((e) => e.via === "impl").map((e) => [sym.get(e.src), sym.get(e.dst)]);
+    assert.deepEqual(pairs.filter(([a, b]) => a === trait || b === trait).length, 4);
+    assert.ok(pairs.some(([a, b]) => a === impl && b === trait));
+    assert.ok(!pairs.some(([a, b]) => a === other || b === other));
+  });
+
   it("links a TS reference to a Rust function across the language gap", () => {
     const g = buildGraph({
       documents: [

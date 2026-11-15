@@ -115,6 +115,27 @@ export function buildGraph({ documents, links = [], isTest = () => false, testLi
     return files.has(file) ? [keyOf(symbol, file)] : [...files].map((f) => keyOf(symbol, f));
   }
 
+  // rust-analyzer emits no relationships, so a trait method and its impls are
+  // linked by name: `impl#[Type][Trait]m().` implements `Trait#m().` in the same
+  // crate. A same-named trait elsewhere in the crate links too, which can only
+  // hide dead code, never invent it.
+  const traitMethods = new Map();
+  for (const n of nodes.values()) {
+    if (n.lang !== "rust" || n.file === null || n.kind !== "function") continue;
+    const m = /(?:^|\/)([^/#[\]`]+)#([^#/.()]+)\(\)\.$/.exec(descriptors(n.symbol));
+    if (!m) continue;
+    const key = `${crateOf(n.symbol)} ${m[1]} ${m[2]}`;
+    traitMethods.has(key) ? traitMethods.get(key).push(n.key) : traitMethods.set(key, [n.key]);
+  }
+  for (const n of nodes.values()) {
+    if (n.lang !== "rust" || n.file === null) continue;
+    const m = /impl#\[[^\]]*\]\[`?([^\]`<]+)[^\]]*\]([^#/.()]+)\(\)\.$/.exec(n.symbol);
+    for (const trait of (m && traitMethods.get(`${crateOf(n.symbol)} ${m[1]} ${m[2]}`)) ?? []) {
+      edge(trait, n.key, n.file, n.line, "impl");
+      edge(n.key, trait, n.file, n.line, "impl");
+    }
+  }
+
   // TS types match by shape: a call through an interface names the interface's
   // member, never the class whose instance it holds. Link each used member of a
   // type to the same member of every used class that has all the type's members.
@@ -218,6 +239,9 @@ export function nameOf(symbol) {
   const match = LAST.exec(descriptors(symbol));
   return match ? match[1].replace(/^`|`$/g, "") : symbol;
 }
+
+/** `scheme manager package version`: the crate or package a symbol is in. */
+const crateOf = (symbol) => symbol.slice(0, symbol.length - descriptors(symbol).length);
 
 /** The descriptors before the last one; ends in `#` for a member of a type. */
 function parentOf(symbol) {

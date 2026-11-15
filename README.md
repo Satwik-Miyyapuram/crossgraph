@@ -14,6 +14,9 @@ plain SQL.
 - Node 22.13 or newer (`node:sqlite`, `path.matchesGlob`)
 - `rust-analyzer` on `PATH`, if the repo has Rust
 - `npx`, which fetches `@sourcegraph/scip-typescript` on first run
+- Generated code in place, such as wasm-bindgen output. An import
+  that does not resolve leaves its uses out of the graph, so whatever they
+  reach looks dead.
 
 ## Use
 

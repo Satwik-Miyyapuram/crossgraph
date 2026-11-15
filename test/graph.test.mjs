@@ -185,4 +185,13 @@ describe("buildGraph", () => {
     });
     assert.deepEqual(g.missing, [{ via: "tauri", name: "gone", file: "web/ipc.ts", line: 3 }]);
   });
+
+  it("does not report a test invoking a command that only its fake handles", () => {
+    const g = buildGraph({
+      documents: [doc("web/ipc.test.ts", [def(0, `${TS}\`ipc.test.ts\`/t().`, 4)])],
+      links: [{ via: "tauri", from: { file: "web/ipc.test.ts", line: 3 }, to: null, name: "ping" }],
+      isTest: (f) => f.endsWith(".test.ts"),
+    });
+    assert.deepEqual(g.missing, []);
+  });
 });

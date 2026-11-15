@@ -127,7 +127,8 @@ export function buildGraph({ documents, links = [], isTest = () => false, exclud
       for (const symbol of uses) edge(targets(symbol, null)[0], target, link.to.file, link.to.line, link.via);
     } else {
       if (!target || !containers.has(link.from.file)) {
-        missing.push({ via: link.via, name: link.name, file: link.from.file, line: link.from.line });
+        // Tests invoke commands their fakes answer; only app code can miss one.
+        if (!isTest(link.from.file)) missing.push({ via: link.via, name: link.name, file: link.from.file, line: link.from.line });
         continue;
       }
       edge(around(link.from.file, link.from.line - 1, Number.MAX_SAFE_INTEGER), target, link.from.file, link.from.line, link.via);

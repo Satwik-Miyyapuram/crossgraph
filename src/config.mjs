@@ -17,6 +17,7 @@ export function loadConfig(root) {
     root,
     out: raw.out ?? ".crossgraph",
     ts: { projects: raw.ts?.projects ?? [], extraProjects: raw.ts?.extraProjects ?? [], indexer: raw.ts?.indexer },
+    requires: raw.requires ?? [],
     rust: raw.rust ?? null,
     exclude: raw.exclude ?? [],
     tests: raw.tests ?? [],

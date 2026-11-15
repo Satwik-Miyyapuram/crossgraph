@@ -22,6 +22,11 @@ const SKIP_DIRS = new Set(["node_modules", "target", ".git"]);
  */
 export function build(root, { index = true, log = () => {} } = {}) {
   const config = loadConfig(root);
+  // Without generated code, imports of it do not resolve and what they reach looks dead.
+  const absent = config.requires.filter((r) => !existsSync(join(root, r.path)));
+  if (absent.length) {
+    throw new Error(`crossgraph: generate these first:\n${absent.map((r) => `  ${r.path}${r.hint ? ` (${r.hint})` : ""}`).join("\n")}`);
+  }
   const out = join(root, config.out);
   mkdirSync(out, { recursive: true });
   const tsScip = join(out, "ts.scip");

@@ -16,7 +16,8 @@ plain SQL.
 - `npx`, which fetches `@sourcegraph/scip-typescript` on first run
 - Generated code in place, such as wasm-bindgen output. An import
   that does not resolve leaves its uses out of the graph, so whatever they
-  reach looks dead.
+  reach looks dead. List such files under `requires` and `build` refuses
+  to run without them.
 
 ## Use
 
@@ -54,6 +55,7 @@ Add `--json` to any command for machine-readable output. Add `.crossgraph/` to
     "projects": ["tsconfig.json"],
     "extraProjects": [{ "name": "tests", "extends": "tsconfig.json", "include": ["test/**/*"] }]
   },
+  "requires": [{ "path": "pkg/app.d.ts", "hint": "npm run build:wasm" }],
   "rust": { "root": "." },
   "exclude": ["third_party/**"],
   "tests": ["**/*.test.ts", "**/tests/**"],
@@ -74,6 +76,8 @@ Node's `path.matchesGlob`; a `**/x` glob also matches `x` at the root.
   from the written file, so `"../src"` means `src` at the root.
 - `ts.indexer`: the npx package to index with; defaults to a pinned
   `@sourcegraph/scip-typescript`.
+- `requires`: generated files that must exist before a build, each with a
+  `hint` saying how to make it.
 - `rust.root`: the Cargo workspace root. Leave `rust` out for a TS-only repo.
 - `exclude`: files left out of the graph, such as vendored code. Uses of their
   symbols still show, as external nodes.
